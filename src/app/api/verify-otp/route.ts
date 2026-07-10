@@ -6,6 +6,7 @@ import { verifyOtpToken } from '@/lib/otpToken';
 import { validateVerifyOtpPayload } from '@/lib/otpValidation';
 import { authenticateApiRequest } from '@/lib/apiAuth';
 import { consumeSlidingWindowLimit } from '@/lib/rateLimit';
+import { enforceOtpRequestAccess } from '@/lib/ipAccessControl';
 
 // Brute-force protection for OTP guessing. A 6-digit OTP has 1,000,000
 // combinations; without these caps an attacker could script guesses until the
@@ -19,32 +20,24 @@ const VERIFY_MOBILE_WINDOW_MS = 10 * 60 * 1000; // ...per 10 minutes.
 const VERIFY_IP_LIMIT = 300; // attempts per IP (loose anti-rotation backstop)...
 const VERIFY_IP_WINDOW_MS = 10 * 60 * 1000; // ...per 10 minutes.
 
-function getClientIpAddress(request: NextRequest) {
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  if (forwardedFor) {
-    const [firstIp] = forwardedFor.split(',');
-    if (firstIp?.trim()) {
-      return firstIp.trim();
-    }
-  }
-
-  const realIp = request.headers.get('x-real-ip');
-  if (realIp?.trim()) {
-    return realIp.trim();
-  }
-
-  const cfConnectingIp = request.headers.get('cf-connecting-ip');
-  if (cfConnectingIp?.trim()) {
-    return cfConnectingIp.trim();
-  }
-
-  return 'unknown';
-}
-
 export async function POST(request: NextRequest) {
   const authResponse = authenticateApiRequest(request);
   if (authResponse) {
     return authResponse;
+  }
+
+  const accessDecision = await enforceOtpRequestAccess(request);
+  if (!accessDecision.allowed) {
+    const response = NextResponse.json(
+      {
+        status: 'error',
+        code: accessDecision.code,
+        message: accessDecision.message,
+      },
+      { status: accessDecision.status }
+    );
+    setCorsHeaders(response, request);
+    return response;
   }
 
   const payload = await request.json();
@@ -62,7 +55,7 @@ export async function POST(request: NextRequest) {
   const { otp, mobileNumber, token } = validation.data;
 
   // --- Brute-force guards (run before any OTP comparison) ---
-  const clientIpAddress = getClientIpAddress(request);
+  const clientIpAddress = accessDecision.clientIpAddress;
 
   const ipLimitResult = await consumeSlidingWindowLimit(
     `otp:verify:ip:${clientIpAddress}`,

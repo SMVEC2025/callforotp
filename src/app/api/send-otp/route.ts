@@ -7,6 +7,7 @@ import { createOtpToken } from '@/lib/otpToken';
 import { validateSendOtpPayload } from '@/lib/otpValidation';
 import { consumeSlidingWindowLimit } from '@/lib/rateLimit';
 import { authenticateApiRequest } from '@/lib/apiAuth';
+import { enforceOtpRequestAccess } from '@/lib/ipAccessControl';
 
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 const OTP_DAILY_LIMIT = 10;
@@ -30,33 +31,27 @@ const OTP_COOKIE_OPTIONS = {
   path: '/',
 };
 
-function getClientIpAddress(request: NextRequest) {
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  if (forwardedFor) {
-    const [firstIp] = forwardedFor.split(',');
-    if (firstIp?.trim()) {
-      return firstIp.trim();
-    }
-  }
-
-  const realIp = request.headers.get('x-real-ip');
-  if (realIp?.trim()) {
-    return realIp.trim();
-  }
-
-  const cfConnectingIp = request.headers.get('cf-connecting-ip');
-  if (cfConnectingIp?.trim()) {
-    return cfConnectingIp.trim();
-  }
-
-  return 'unknown';
-}
-
 export async function POST(request: NextRequest) {
   try {
     const authResponse = authenticateApiRequest(request);
     if (authResponse) {
       return authResponse;
+    }
+
+    const accessDecision = await enforceOtpRequestAccess(request);
+    if (!accessDecision.allowed) {
+      const response = NextResponse.json(
+        {
+          status: 'error',
+          code: accessDecision.code,
+          message: accessDecision.message,
+        },
+        { status: accessDecision.status }
+      );
+
+      setCorsHeaders(response, request);
+
+      return response;
     }
 
     let payload: unknown;
@@ -94,8 +89,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { mobileNumber, college } = validation.data;
-
-    const clientIpAddress = getClientIpAddress(request);
+    const clientIpAddress = accessDecision.clientIpAddress;
 
     for (const limit of IP_LIMITS) {
       const ipLimitResult = await consumeSlidingWindowLimit(

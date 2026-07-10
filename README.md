@@ -20,6 +20,10 @@ SMS_TEMPLATE_ID_MVIT=your_mvit_template_id
 SMS_TEMPLATE_ID_MAILAM=your_mailam_template_id
 REACT_ORIGIN=http://localhost:3000,http://localhost:3001
 SESSION_SECRET=your_secret_key
+API_AUTH_KEY=your_internal_api_key
+REDIS_URL=redis://localhost:6379
+OTP_ALLOWED_COUNTRIES=IN
+OTP_IP_LOOKUP_URL_TEMPLATE=https://free.freeipapi.com/api/json/{ip}
 ```
 
 Replace the placeholder values with your actual SMS API credentials. Add multiple React/frontend origins as a comma-separated list in `REACT_ORIGIN`.
@@ -33,6 +37,14 @@ PORT=5000 npm run dev
 The API will be available at [http://localhost:5000](http://localhost:5000).
 
 ## API Endpoints
+
+## Access Control
+
+- Public OTP requests are allowed only from countries listed in `OTP_ALLOWED_COUNTRIES` (`IN` by default).
+- Public IPs identified as proxy or VPN are blocked.
+- Once a public IP is blocked for country or proxy reasons, it is stored in Redis and denied on later requests until the key is removed.
+- Local development IPs such as `127.0.0.1`, `::1`, and private LAN ranges bypass this check.
+- In production, your reverse proxy or platform must forward the real client IP in `x-forwarded-for`, `x-real-ip`, or `cf-connecting-ip`.
 
 ### Send OTP
 
